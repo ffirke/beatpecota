@@ -1,18 +1,26 @@
-wkdir <- "C:/Users/Frank/Documents/Blog/Baseball/BeatPecota/"
+# Frank Firke
+# April 2016
+# Analysis to try to "Beat PECOTA" (for hitters)
 
-files <- list.files(wkdir)
+rm(list=ls())
+set.seed(100)
+
+wkdir <- "C:/Users/Frank/Documents/GitHub/beatpecota/"
+
+files <- list.files(paste0(wkdir,"/data"))
 
 pecota <- files[substr(files,1,3)=="pec"]
 
 require(readr)
 require(readxl)
+require(caret)
 
 sink("blah.txt")
 
-pecota13hitters <- read_excel(paste0(wkdir,pecota[1]),sheet=2)
-pecota14hitters <- read_excel(paste0(wkdir,pecota[2]),sheet=2)
-pecota15hitters <- read_excel(paste0(wkdir,pecota[3]),sheet=2,skip=5)
-pecota16hitters <- read_excel(paste0(wkdir,pecota[4]),sheet=2)
+pecota13hitters <- read_excel(paste0(wkdir,"data/",pecota[1]),sheet=2)
+pecota14hitters <- read_excel(paste0(wkdir,"data/",pecota[2]),sheet=2)
+pecota15hitters <- read_excel(paste0(wkdir,"data/",pecota[3]),sheet=2,skip=5)
+pecota16hitters <- read_excel(paste0(wkdir,"data/",pecota[4]),sheet=2)
 
 sink()
 
@@ -36,7 +44,7 @@ hittersproj <- rbind_list(hitters14,hitters15,hitters16)
 perf <- files[substr(files,1,3)=="tav"]
 
 for (i in 1:3){
-  temp <- read_csv(paste0(wkdir,perf[i]))
+  temp <- read_csv(paste0(wkdir,"data/",perf[i]))
   temp <- temp %>% select(NAME,YEAR,TAv,PA)
   if (i == 1){
     perfstack <- temp
@@ -48,7 +56,7 @@ for (i in 1:3){
 perfstack %<>% rename(NAMEFULL=NAME,TAv_ACTUAL=TAv,PA_ACTUAL=PA)
 
 for (i in 1:length(perf)){
-  temp <- read_csv(paste0(wkdir,perf[i]))
+  temp <- read_csv(paste0(wkdir,"data/",perf[i]))
   temp <- temp %>% select(NAME,YEAR,TAv,PA)
   if (i == 1){
     lagperfstack <- temp
@@ -139,11 +147,17 @@ withresults %>% mutate(EV = ifelse(Over > Under,10*Over - 11.5*Under,10*Under-11
   filter(EV > 0 & res_valid != 'Push') %>%
   summarize(result = sum(gameresult),ct=n()) -> out4
 
-temp <- data_frame(Model = names(formulalist)[i],
+withresults %>% filter(ProjResult != 'Push') %>%
+  summarize(result = sum(ifelse(ProjResult=="Under",10,-11.5))) -> out5
+
+temp <- data_frame(#Model = names(formulalist)[i],
                    likelySum = out1$result[1],likelyCt = out1$ct[1],
                    predSum = out2$result[1],predCt = out2$ct[1],
                    evPlusSum = out3$result[1],evPlusCt = out3$ct[1],
-                   evPlusNoPushSum = out4$result[1],evPlusNoPushCt = out4$ct[1])
+                   evPlusNoPushSum = out4$result[1],evPlusNoPushCt = out4$ct[1],
+                   allUnderSum = out5$result[1])
+
+glimpse(temp)
 
 final_modelh<-train(BasicForm,data=pre16,method="rf",
                    trControl=ctrl,
@@ -155,56 +169,7 @@ res_valid <- predict.train(final_modelh,newdata=hitterspred)
 prob_valid <- predict.train(final_modelh,newdata=hitterspred,type="prob")
 hitterspred %>% cbind(prob_valid) %>% cbind(res_valid) -> resultsh
 
-resultsh %>% filter(res_valid != 'Push') %>% arrange(res_valid,LASTNAME) %>%
-  select(BPID,res_valid,NAMEFULL) -> output_h
+write_csv(resultsh,paste0(wkdir,"predictions/Hitter Predictions.csv"))
+write_csv(pre16,paste0(wkdir,"data/Hitter Training Data.csv"))
 
-output_h %>% filter(res_valid == "Over") -> shellfeed
-
-shellfeed$picked <- FALSE
-shellfeed$picked[1] <- T
-
-i <- 60
-n <- 0
-while (n < 30 & i <= nrow(shellfeed)){
-  if (shellfeed$picked[i] == F) { 
-    shell.exec(paste0(
-      "http://www.baseballprospectus.com/fantasy/extras/beatpecota/beatpecota.php?BO3=",
-      shellfeed$BPID[i]))
-    Sys.sleep(10)
-    n <- n + 1
-    shellfeed$picked[i] == T
-  }
-  i <- i + 1
-  print (paste(i,n))
-}
-
-  output_h %>% filter(res_valid == "Under") -> shellfeed
-  
-  shellfeed$picked <- FALSE
-  shellfeed$picked[1] <- T
-  
-  i <- 60
-  n <- 0
-  while (n < 50 & i <= nrow(shellfeed)){
-    if (shellfeed$picked[i] == F) { 
-      shell.exec(paste0(
-        "http://www.baseballprospectus.com/fantasy/extras/beatpecota/beatpecota.php?BU3=",
-        shellfeed$BPID[i]))
-      Sys.sleep(10)
-      n <- n + 1
-      shellfeed$picked[i] == T
-      print (paste(i,n,shellfeed$NAMEFULL[i]))
-    }
-    i <- i + 1
-    
-  }
-  
-  
-  output_h %>% filter(res_valid == "Over") -> blah
-  
-for (i in 1:5) {
-      shell.exec(paste0(
-        "http://www.baseballprospectus.com/fantasy/extras/beatpecota/beatpecota.php?BO3=",
-        blah$BPID[i+54]))
-      Sys.sleep(10)
-    }
+saveRDS(final_modelh,paste0(wkdir,"predictions/HitterModel.RDS"))

@@ -1,0 +1,198 @@
+---
+title: "Trying to Beat PECOTA"
+author: "Frank Firke"
+output: html_document
+---
+
+I don't have much experience doing strictly predictive modelling. There are a few reasons for this---it hasn't been part of the job where I've worked, and building a prediction/projection system has never seemed worth it as a side sports project. But when Baseball Prospectus opened up a "Beat PECOTA" contest, I figured it was something I could do in a quick-and-dirty fashion. It'd be fun and I'd get a partial answer to something I'm curious about: in a baseball context, how much can fancy machine learning algorithms substitute for some of the very subtle domain knowledge that most projection systems rely on. So I took most of the afternoon and a lot of the evening the day before Opening Day and gave it a shot.
+
+It wound up being not as quick and a fair bit dirtier than I was hoping for, but I got some submissions in (not quite how I'd've liked, as I'll explain below), and I'm using this post to explain what I wound up doing, the issues I noticed as I did it, and some of the things that the model output suggests.
+
+This post is also an experiment in writing and publishing something using RMarkdown (so you can see all the code and corresponding ugly-ass output with less writing involved). If you're not interested in the R code, I apologize for the clutter.
+
+### Some Background
+
+PECOTA predicts major league performance for a large number of players (hitters and pitchers), and the contest is pretty straightforward: for as many players as you want, pick over or under; if the player deviates the projection by a certain amount (0.007 of True Average or 0.3 runs of Deserved Run Average) and exceeds a playing time threshold (80 PA or 20 IP), then you get 10 points for the right direction and lose 11.5 points for the wrong direction.
+
+Since BP archives PECOTA projections^[Sort of---PECOTA outputs change somewhat frequently as the inputs change, but you can grab a snapshot from around the same time each year.], we can go back and score all of their projections in years past based on the current scoring rules. In theory, then, you can look for patterns in past over/unders and use that to predict how likely a player is to have a given result. 
+
+### The Model
+
+(Feel free to skip to the next section if you don't care about the stats involved.) I decided to use a random forest model. You should read up on this class of models if you're not familiar with it, but the basic theory is to grow a large number of individual decision trees on random selections of data using random choices of predictors. Because of the large number of trees, it is capable of avoiding much of the overfitting that a traditional regression model is subject to, which is key in this context because of the comparatively limited number of data points (roughly 300 each of hitters and pitchers per year). 
+
+By using a tree model, the random forest also incorporates non-linearities (for instance, a variable whose predictive power changes depending on the value of another variable) naturally without having them be pre-specified. Since I expected that few, if any, variables would have simple linear relationships  with the outcome of interest, this is a huge plus for the random forest.
+
+As with any class of models, RFs have their drawbacks: they require parameter tuning (e.g., figuring out how many trees to grow) and they don't provide clear outputs (like tests of statistical signifiance or an R^2 figure), but for someone who's just trying to throw something together (as I was) they make a lot of sense.
+
+### The Data
+
+I trained the model on a dataset consisting of 2014 and 2015 PECOTA projections, along with some historical performance data (for instance, how they did relative to their projection the previous year). I decided not to train the model on seasons from before 2014 for two main reasons. The first was the amount of time it would take to pull and validate the data and to match it up with the external data sources I was using. The second was relevance: PECOTA changes substantively year-to-year, and so its blind spots in years past likely differ from any current gaps the model will find.
+
+For pitchers, I also merged in information from Steamer and ZiPS, two other projection systems available from FanGraphs; in theory, discrepancies between PECOTA and other systems indicate a greater likelihood of PECOTA missing. I do think their inclusion did help, and would like to use them in any further analysis of this. 
+
+I originally intended to have my pitchers submission include ZiPS and Steamer, but due to a coding error I only found later (quick and very dirty!) that didn't end up happening. Since cleaning the datasets to merge them took a fair amount of time for a modest increase in predictive power, so I skipped doing that for the hitters.
+
+One other huge pitching flaw: the PECOTA contest is only being judged on DRA. DRA wasn't released until last year, so there are no projections for it in old data. There were projections for Fair Run Average (DRA's sort-of predecessor), but FRA results were deprecated and aren't available anymore. In the interest of speed, I just ran things with plain ERA. Plain ERA and DRA are *very* different stats, but I actually wouldn't be surprised if this didn't make a huge difference (i.e. that beating a DRA projection typically overlaps with beating an ERA projection).
+
+The variables I wound up including in the two projections are:
+
+* Handedness 
+* Height
+* Weight
+* League (hitters only, by accident---yet again, did this very quicky)
+* Age
+* BABIP
+* BP Breakout, Improve, Collapse, Attrition scores
+* Rookie indicator
+
+For hitters:
+
+* Position
+* HR
+* BB
+* SO
+* AVG
+* OBP
+* SLG
+* tAV
+* PA
+* Prior year's: projected tAV, tAV, PA, projection result
+
+For pitchers:
+
+* BB9
+* SO9
+* GB%
+* ERA
+* IP
+* Prior year's: projected ERA, ERA, projection result (lagged IP left out due to oversight)
+
+I judged the different model specifications on how they did on a 30% validation set, using as my metric the actual BP scoring rules. I ultimately settled on judging them on all predictions, as restricting to high-certainty ones (or even positive expected value ones) seemed to decrease the sample size without necessarily improving the results; having chosen the model, I then fit it to the entire dataset, and predicted on the 2016 data. 
+
+### Some Results
+
+First: My full prediction set is [in my GitHub](https://github.com/ffirke/beatpecota); the ones I submitted to BP were a haphazard subset, due to their cutoff at 99 predictions per category and the issues I had submitting them in the first place (and they weren't changed as I revised the code, so some screw-ups might persist there). If you're curious about what this wonky black box spits out for your favorite player, go there.
+
+Moving on to potentially more generalizable patterns, I've plotted the feature importance lists for the two models below. (Feature importance is determined by comparing actual prediction results to prediction results when that variable is randomly permuted. See [this description](http://topepo.github.io/caret/varimp.html).
+
+```{r, echo=FALSE}
+require(caret)
+require(dplyr)
+require(ggplot2)
+require(readr)
+```
+
+```{r}
+wkdir <- "C:/Users/Frank/Documents/GitHub/BeatPecota/"
+hittermodel <- readRDS(paste0(wkdir,"predictions/HitterModel.rds"))
+pitchermodel <- readRDS(paste0(wkdir,"predictions/PitcherModel.rds"))
+
+plot(varImp(hittermodel))
+plot(varImp(pitchermodel))
+
+```
+
+The main thing that jumps out to me is that the PECOTA projected playing time is considered to be important for both models; another factor is using the lagged projection is important, as are pretty standard performance projection baseline (ERA and SLG, for instance).
+
+Since these aren't regression models, we can't get coefficients that neatly tell us how these variables line up; a simple way to get a hint of this is to plot conditional distributions, i.e., how these variables are distributed for the different classes (Push, Over, and Under) in the training data.
+
+```{r}
+
+pitcherinput <- read_csv(paste0(wkdir,"data/Pitcher Training Data.csv"))
+hitterinput <- read_csv(paste0(wkdir,"data/Hitter Training Data.csv"))
+
+```
+
+```{r}
+
+pitimp = varImp(pitchermodel)$importance %>% as.matrix()
+data_frame(var = row.names(pitimp),imp = pitimp[,1]) %>% arrange(-imp) %>% head(5) -> imppitch
+
+# Pitching Plots
+
+for (i in imppitch$var) {
+  plot <- ggplot(pitcherinput,aes_string(x=i,group="ProjResult",color="ProjResult")) + geom_density()
+  print(plot)
+}
+
+hitimp = varImp(hittermodel)$importance %>% as.matrix()
+data_frame(var = row.names(hitimp),imp = hitimp[,1]) %>% arrange(-imp) %>% head(5) -> imphit
+
+# Hitting Plots
+
+for (i in imphit$var) {
+  plot <- ggplot(hitterinput,aes_string(x=i,group="ProjResult",color="ProjResult")) + geom_density()
+  print(plot)
+}
+
+```
+
+Having just dropped a bunch of plots, I want to make a couple things clear. One is that these show the reverse of the conditional probability you might be expecting, i.e., they show that players who beat their projections are more likely to have had a high PA (or whatever) projection, not necessarily that high PA projections mean a player is likely to beat their tAV projection. Another is that a large part of the appeal of a random forest is to capture interactions and non-linearities, so just looking at density plots is not going to tell the final story. The third part is that, while these predictors seem to perform well against the null, I haven't done any rigorous testing to see how different the distributions plotted are.
+
+Seeing that projected playing time seems to be positively correlated with performance relative to the projection is one of the two things I would say constitute "insight" out of this whole project. (Without knowing more about the spreadsheets I can't be sure, but a possible explanation that playing time incorporates subjective depth-chart information, which in turn relates to subjective talent estimates,  makes some intuitive sense.)
+
+The other "insight" (or at least, something I didn't know coming in) is summarized in the chunk below. The tables are just the raw results for all players; the plots show the distributions of the PECOTA error, with black lines for the average error and red lines delineating the push zone.
+
+```{r}
+
+# Hitter Results
+
+table(hitterinput$ProjResult)
+
+hitterelig <- hitterinput %>% filter(PA_ACTUAL > 80)
+
+table(hitterelig$ProjResult)
+
+ggplot(hitterelig,aes(x=TAv_ACTUAL-TAv)) + geom_density() + geom_vline(xintercept=mean(hitterelig$TAv_ACTUAL-hitterelig$TAv,na.rm=T),color="black") +
+geom_vline(xintercept=0.007,color="red") +
+geom_vline(xintercept=-0.007,color="red")
+# Pitcher Results
+
+table(pitcherinput$ProjResult)
+
+pitcherelig <- pitcherinput %>% filter(IP_ACTUAL > 20)
+
+table(pitcherelig$ProjResult)
+
+ggplot(pitcherelig,aes(x=ERA_ACTUAL-ERA)) + geom_density() + geom_vline(xintercept=mean(pitcherelig$ERA_ACTUAL-pitcherelig$ERA,na.rm=T),color="black") + geom_vline(xintercept=0.3,color="red") + 
+  geom_vline(xintercept=-0.3,color="red")
+
+```
+
+That is to say, PECOTA's misses tend to be high (very much so for hitters, a bit for pitchers), meaning that going under on every player would have done very well for hitters and a bit better than breaking even for pitchers:
+
+```{r}
+
+sum(c(-11.5,10) * table(pitcherelig$ProjResult)[c(1,3)])
+
+sum(c(-11.5,10) * table(hitterelig$ProjResult)[c(1,3)])
+```
+
+The result for pitchers is weakly statistically significant, while the hitter result is significant:
+
+```{r}
+
+# Pitcher Statistical Significance
+
+prop.test(table(pitcherelig$ProjResult)[c(1,3)],rep(nrow(pitcherelig),2))
+
+# Hitter Statistical Significance
+
+prop.test(table(hitterelig$ProjResult)[c(1,3)],rep(nrow(hitterelig),2))
+```
+
+(Because I didn't notice this pattern until I wrote all of this up, I didn't use "always go under" as a baseline for model computations. Having added it back in, the models *do* outperform it, so that's nice.)
+
+Without further research, I'm wary of concluding anything about this. It could be that PECOTA has a persistent flaw; it could be that PECOTA has had issues pricing in decreasing offensive production; it could be that this is a selection effect that an all-purpose projection system can't really cover up; it could be that PECOTA just had two rough years from this standpoint. I'm looking forward to seeing what happens with these predictions this year, and also to doing some more digging to see if these patterns hold for other projection systems.
+
+## Conclusions
+
+A few takeaways from this whole exercise (nothing particularly novel):
+
+* The last two years, there've been apparently exploitable patterns in PECOTA's projections of regular players, most concretely that batters are noticeably more likely to underperform than overperform. Those performance patterns also correlate with other existing variables.
+* Even with data issues, code sloppiness, moderate lack of know-how, and a big time crunch, it's possible to put together an ML model that seems to perform fairly well in this prediction space.
+* There are much worse ways to spend the day before opening day than crunching baseball numbers.
+
+I'm planning on following up on that first point with a more general and methodical study in the near future, as I think it's potentially an area where some real understanding can be gained.
+
+I linked my predictions earlier; all code and data from this are on GitHub, except for the PECOTA spreadsheets, which aren't mine to distribute.
